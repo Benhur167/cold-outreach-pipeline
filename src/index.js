@@ -404,6 +404,7 @@ async function runInteractivePipeline() {
   const defaultSubject = process.env.OUTREACH_SUBJECT || 'Quick question regarding <COMPANY_NAME>';
   const defaultBody = process.env.OUTREACH_TEMPLATE || 'Hi <FIRST_NAME>,\n\nI noticed you are leading the team at <COMPANY_NAME> as <TITLE>. I\'d love to connect.\n\nBest,\nYour Name';
 
+  await sleep(350); // Let stdin buffer settle on Windows
   const { editTemplate } = await inquirer.prompt([
     {
       type: 'confirm',
@@ -443,6 +444,7 @@ async function runInteractivePipeline() {
   console.log(chalk.cyan('===================================================='));
 
   // 5. Send Cold Email outreach
+  await sleep(350); // Let stdin buffer settle on Windows
   const { sendOutreach } = await inquirer.prompt([
     {
       type: 'confirm',
