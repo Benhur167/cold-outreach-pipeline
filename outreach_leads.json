@@ -1,0 +1,22 @@
+[
+  {
+    "firstName": "Sarah",
+    "lastName": "Jenkins",
+    "title": "Founder & CEO",
+    "linkedinUrl": "https://www.linkedin.com/in/sarahjenkins-google",
+    "companyName": "Google Corp",
+    "domain": "google.com",
+    "email": "sarah.jenkins@google.com",
+    "emailStatus": "verified"
+  },
+  {
+    "firstName": "David",
+    "lastName": "Miller",
+    "title": "VP of Engineering",
+    "linkedinUrl": "https://www.linkedin.com/in/davidmiller-google",
+    "companyName": "Google Corp",
+    "domain": "google.com",
+    "email": "david.miller@google.com",
+    "emailStatus": "verified"
+  }
+]

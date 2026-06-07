@@ -1,0 +1,19 @@
+{
+  "name": "cold-outreach-pipeline",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Automated cold-outreach pipeline leveraging Ocean.io, Prospeo, Eazyreach, and Brevo.",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "test:mock": "node src/index.js --mock google.com"
+  },
+  "dependencies": {
+    "axios": "^1.7.2",
+    "chalk": "^5.3.0",
+    "commander": "^12.1.0",
+    "dotenv": "^16.4.5",
+    "inquirer": "^9.2.23",
+    "ora": "^8.0.1"
+  }
+}
