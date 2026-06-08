@@ -27,7 +27,7 @@ export async function searchCompanies(query, limit = 10, apiKey) {
   try {
     const response = await axios.post(url, payload, {
       headers: {
-        'Authorization': `Bearer ${token}`,
+        'X-Api-Key': token,
         'Content-Type': 'application/json'
       }
     });
