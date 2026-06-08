@@ -43,7 +43,7 @@ program
   .option('-q, --query <query>', 'Keyword/search term for finding companies')
   .option('-d, --domain <domain>', 'Process outreach for a single target domain directly')
   .option('-l, --limit <number>', 'Maximum number of companies to fetch', parseInt, 5)
-  .option('-c, --contact-limit <number>', 'Maximum contacts to enrich per company', parseInt, 2)
+  .option('-c, --contact-limit <number>', 'Maximum contacts to enrich per company', parseInt, 1)
   .option('-s, --send', 'Send emails automatically without prompting')
   .option('-y, --seniorities <seniorities>', 'Comma-separated list of seniorities to query (or "All")')
   .option('-t, --titles <titles>', 'Comma-separated list of job titles to query (or "All")')
