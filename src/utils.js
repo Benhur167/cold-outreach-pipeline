@@ -1,4 +1,5 @@
 import chalk from 'chalk';
+import dns from 'dns/promises';
 
 /**
  * Delays execution for the specified number of milliseconds.
@@ -87,4 +88,19 @@ export const printBanner = () => {
  */
 export const printHeader = (title) => {
   console.log('\n' + chalk.magenta.bold(`--- ${title.toUpperCase()} ---`) + '\n');
+};
+
+/**
+ * Checks if a domain has active MX (Mail Exchange) records.
+ * @param {string} domain 
+ * @returns {Promise<boolean>}
+ */
+export const hasMailServer = async (domain) => {
+  if (!domain) return false;
+  try {
+    const mxRecords = await dns.resolveMx(domain);
+    return mxRecords && mxRecords.length > 0;
+  } catch (err) {
+    return false;
+  }
 };

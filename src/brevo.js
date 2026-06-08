@@ -14,7 +14,11 @@ export function compileTemplate(template, data) {
     .replace(/<FIRST_NAME>/g, data.firstName || '')
     .replace(/<LAST_NAME>/g, data.lastName || '')
     .replace(/<COMPANY_NAME>/g, data.companyName || '')
-    .replace(/<TITLE>/g, data.title || 'Decision Maker');
+    .replace(/<TITLE>/g, data.title || 'Decision Maker')
+    .replace(/<SENDER_NAME>/g, data.senderName || process.env.BREVO_SENDER_NAME || 'Your Name')
+    .replace(/<SENDER_GITHUB>/g, data.senderGithub || process.env.SENDER_GITHUB || '')
+    .replace(/<SENDER_PORTFOLIO>/g, data.senderPortfolio || process.env.SENDER_PORTFOLIO || '')
+    .replace(/<SENDER_RESUME_LINK>/g, data.senderResumeLink || process.env.SENDER_RESUME_LINK || '');
 }
 
 /**
@@ -57,6 +61,13 @@ export async function sendColdEmail(emailDetails, config = {}) {
     subject: emailDetails.subject,
     htmlContent: `<html><body>${htmlContent}</body></html>`
   };
+
+  // Attach files if provided (accepts an array of attachment objects or a single attachment object)
+  if (emailDetails.attachment) {
+    payload.attachment = Array.isArray(emailDetails.attachment)
+      ? emailDetails.attachment
+      : [emailDetails.attachment];
+  }
 
   try {
     const response = await axios.post(url, payload, {

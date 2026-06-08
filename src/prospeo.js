@@ -2,32 +2,66 @@ import axios from 'axios';
 import { log } from './utils.js';
 
 /**
- * Searches for contacts (decision makers) at a company domain using Prospeo's search-person.
+ * Searches for contacts (decision makers, recruiters, tech leads, etc.) at a company domain using Prospeo's search-person.
  * @param {string} domain - The company domain (e.g. stripe.com)
  * @param {number} limit - Maximum number of contacts to return (default 5)
- * @param {string} apiKey - Prospeo API Key
+ * @param {Array<string>|string} [seniorities] - Array of seniorities to include, or API key if older signature
+ * @param {Array<string>|string} [titles] - Array of job titles to include, or API key if older signature
+ * @param {string} [apiKey] - Prospeo API Key
  * @returns {Promise<Array<{firstName: string, lastName: string, title: string, linkedinUrl: string, companyName: string, domain: string}>>}
  */
-export async function findContactsForDomain(domain, limit = 5, apiKey) {
-  const token = apiKey || process.env.PROSPEO_API_KEY;
+export async function findContactsForDomain(domain, limit = 5, seniorities = [], titles = [], apiKey) {
+  let token = apiKey;
+  let finalSeniorities = Array.isArray(seniorities) ? seniorities : [];
+  let finalTitles = Array.isArray(titles) ? titles : [];
+
+  // Robust argument mapping if apiKey is passed in place of seniorities or titles
+  if (typeof seniorities === 'string') {
+    token = seniorities;
+    finalSeniorities = [];
+  } else if (typeof titles === 'string') {
+    token = titles;
+    finalTitles = [];
+  }
+
+  token = token || process.env.PROSPEO_API_KEY;
   const url = 'https://api.prospeo.io/search-person';
 
   if (!token || token.includes('your_prospeo_api_key_here')) {
     throw new Error('Prospeo API Key is missing. Please configure PROSPEO_API_KEY in your .env file or run with --mock.');
   }
 
-  // Construct request body with filters for the company domain and decision maker roles
-  const payload = {
-    filters: {
-      company: {
-        websites: {
-          include: [domain]
-        }
-      },
-      person_seniority: {
-        include: ['Founder/Owner', 'C-Suite', 'Vice President']
+  // Construct request body with dynamic filters
+  const filters = {
+    company: {
+      websites: {
+        include: [domain]
       }
-    },
+    }
+  };
+
+  // Only apply seniority filter if seniorities is not empty and doesn't contain 'All' (case-insensitive)
+  const hasSeniorityFilter = finalSeniorities.length > 0 && 
+    !finalSeniorities.some(s => typeof s === 'string' && s.toLowerCase() === 'all');
+  
+  if (hasSeniorityFilter) {
+    filters.person_seniority = {
+      include: finalSeniorities
+    };
+  }
+
+  // Only apply job title filter if titles is not empty and doesn't contain 'All' (case-insensitive)
+  const hasTitleFilter = finalTitles.length > 0 && 
+    !finalTitles.some(t => typeof t === 'string' && t.toLowerCase() === 'all');
+
+  if (hasTitleFilter) {
+    filters.person_job_title = {
+      include: finalTitles
+    };
+  }
+
+  const payload = {
+    filters,
     page: 1
   };
 

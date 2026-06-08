@@ -12,7 +12,8 @@ import {
   printHeader,
   sleep,
   cleanDomain,
-  isValidDomain
+  isValidDomain,
+  hasMailServer
 } from './utils.js';
 
 // Real API imports
@@ -41,13 +42,81 @@ program
   .option('-d, --domain <domain>', 'Process outreach for a single target domain directly')
   .option('-l, --limit <number>', 'Maximum number of companies to fetch', parseInt, 5)
   .option('-c, --contact-limit <number>', 'Maximum contacts to enrich per company', parseInt, 2)
-  .option('-s, --send', 'Send emails automatically without prompting');
+  .option('-s, --send', 'Send emails automatically without prompting')
+  .option('-y, --seniorities <seniorities>', 'Comma-separated list of seniorities to query (or "All")')
+  .option('-t, --titles <titles>', 'Comma-separated list of job titles to query (or "All")')
+  .option('--resume-path <path>', 'Local path to PDF resume file to attach')
+  .option('--resume-url <url>', 'URL of a public PDF resume to attach')
+  .option('--strict', 'Strict mode: only send to 100% verified emails (exclude catch_all)');
 
 program.parse(process.argv);
 const options = program.opts();
 
 // Check if any arguments were provided to skip interactive mode
 const hasCliArguments = options.provider || options.query || options.domain || options.mock || program.args.length > 0;
+
+// Presets for job, internship, and business outreach targets
+const TARGET_PRESETS = {
+  hr: {
+    name: 'HR & Talent Acquisition Team (Recruiter, Talent Acquisition, HR Executive)',
+    seniorities: ['Director', 'Manager', 'Senior', 'Entry'],
+    titles: ['Recruiter', 'Talent Acquisition Specialist', 'Talent Acquisition Partner', 'HR Executive', 'HR Manager', 'Talent Acquisition Manager', 'Talent Acquisition Lead', 'Campus Recruiter', 'University Recruiter']
+  },
+  tech: {
+    name: 'Engineering & Tech Leadership (CTO, VP Engineering, Engineering Manager, Tech Lead)',
+    seniorities: ['Founder/Owner', 'C-Suite', 'Vice President', 'Director', 'Manager'],
+    titles: ['CTO', 'Chief Technology Officer', 'Head of Engineering', 'Director of Engineering', 'VP of Engineering', 'Engineering Manager', 'Software Development Manager', 'Technical Lead', 'Lead Developer', 'Engineering Lead']
+  },
+  founders: {
+    name: 'Startup Founders & CEOs (CEO, Founders, Co-Founders - best for small startups)',
+    seniorities: ['Founder/Owner', 'C-Suite'],
+    titles: ['CEO', 'Founder', 'Co-Founder', 'President']
+  },
+  campus: {
+    name: 'Campus & University Recruitment (Campus Recruiter, University Recruiter)',
+    seniorities: ['Senior', 'Entry', 'Manager'],
+    titles: ['Campus Recruiter', 'University Recruiter', 'Campus Recruitment Specialist']
+  },
+  executives: {
+    name: 'General Decision Makers / Executives (Founders, C-Suite, VPs - Default)',
+    seniorities: ['Founder/Owner', 'C-Suite', 'Vice President'],
+    titles: ['All']
+  },
+  all: {
+    name: 'All Employees (No Filters - Best for micro-startups)',
+    seniorities: ['All'],
+    titles: ['All']
+  },
+  custom: {
+    name: 'Custom Filters (Enter custom job titles & seniorities)',
+    seniorities: [],
+    titles: []
+  }
+};
+
+// Library of cold outreach templates optimized for internships, full-time jobs, and generic networking
+const TEMPLATE_LIBRARY = [
+  {
+    name: 'Tech-focused SDE/Web/Android Internship Inquiry (Highlights GitHub/Projects)',
+    subject: 'SDE Internship / Software Engineering at <COMPANY_NAME>',
+    body: 'Hi <FIRST_NAME>,\n\nI\'m a software engineering student, and I\'ve been following <COMPANY_NAME>\'s growth. I noticed you lead the team as <TITLE> and wanted to reach out.\n\nI\'m looking for an SDE/Web/Android internship and would love to contribute to your engineering team. I build full-stack web and mobile projects (using Node.js, React, and Android), and I\'m used to shipping code quickly.\n\nHere is my GitHub profile: <SENDER_GITHUB>\nAnd my portfolio is here: <SENDER_PORTFOLIO>\n\nI\'ve also attached/linked my resume for your review. Do you have 5 minutes for a quick chat next week about potential opportunities on your team?\n\nBest,\n<SENDER_NAME>'
+  },
+  {
+    name: 'Full-Time SDE/Developer Job Application (Highlights Skills & Resume)',
+    subject: 'SDE Role / Software Developer Opportunity at <COMPANY_NAME>',
+    body: 'Hi <FIRST_NAME>,\n\nI noticed you are working at <COMPANY_NAME> as <TITLE>. I\'ve admire the product you are building and wanted to reach out regarding software development roles.\n\nI am a Software Developer with experience building responsive web apps and scalable backend APIs using React, Node.js, and SQL/NoSQL databases. I\'m passionate about writing clean, testable code and shipping robust user experiences.\n\nHere is my GitHub profile: <SENDER_GITHUB>\nAnd my portfolio: <SENDER_PORTFOLIO>\n\nI have attached my resume for reference. Would you be open to a brief call this week to see if my background aligns with your team\'s needs?\n\nBest,\n<SENDER_NAME>'
+  },
+  {
+    name: 'Developer Peer Referral / Advice Connection (Soft-pitch, networking focus)',
+    subject: 'Quick question from an aspiring developer',
+    body: 'Hi <FIRST_NAME>,\n\nI saw your profile and noticed you work at <COMPANY_NAME> as <TITLE>. I\'m an aspiring software developer looking to get into the startup space, and I really admire the tech stack you use.\n\nI\'m currently looking for developer opportunities to grow my skills. If you have any advice or know if your team is looking for talent, I\'d love to connect.\n\nHere is my GitHub ( <SENDER_GITHUB> ) and my portfolio ( <SENDER_PORTFOLIO> ). My resume is attached.\n\nThanks for your time!\n\nBest,\n<SENDER_NAME>'
+  },
+  {
+    name: 'Default Cold Connection (Original template)',
+    subject: 'Quick question regarding <COMPANY_NAME>',
+    body: 'Hi <FIRST_NAME>,\n\nI noticed you are leading the team at <COMPANY_NAME> as <TITLE>. I\'d love to connect.\n\nBest,\n<SENDER_NAME>'
+  }
+];
 
 async function main() {
   printBanner();
@@ -72,8 +141,45 @@ async function runHeadlessPipeline() {
   const limit = options.limit;
   const contactLimit = options.contactLimit;
   const autoSend = !!options.send;
+  const isStrict = !!options.strict;
 
   log.info(`Running pipeline in ${isMock ? 'MOCK' : 'PRODUCTION'} mode...`);
+
+  // Parse filters from CLI arguments
+  const seniorities = options.seniorities 
+    ? options.seniorities.split(',').map(s => s.trim()) 
+    : ['Founder/Owner', 'C-Suite', 'Vice President'];
+  const titles = options.titles 
+    ? options.titles.split(',').map(t => t.trim()) 
+    : [];
+
+  // Load and validate resume attachment if specified
+  let attachment = null;
+  if (options.resumePath) {
+    try {
+      const resolvedPath = path.resolve(options.resumePath);
+      if (fs.existsSync(resolvedPath)) {
+        const fileContent = fs.readFileSync(resolvedPath).toString('base64');
+        attachment = {
+          content: fileContent,
+          name: path.basename(resolvedPath)
+        };
+        log.info(`Loaded local resume file to attach: ${path.basename(resolvedPath)}`);
+      } else {
+        log.error(`Local resume file not found at path: ${options.resumePath}`);
+        process.exit(1);
+      }
+    } catch (err) {
+      log.error(`Failed to read local resume file: ${err.message}`);
+      process.exit(1);
+    }
+  } else if (options.resumeUrl) {
+    attachment = {
+      url: options.resumeUrl,
+      name: path.basename(options.resumeUrl) || 'resume.pdf'
+    };
+    log.info(`Using remote resume URL: ${options.resumeUrl}`);
+  }
 
   let companies = [];
 
@@ -116,14 +222,34 @@ async function runHeadlessPipeline() {
     }
   }
 
+  // Offline MX Record Validation (Skip in Mock Mode)
+  if (companies.length > 0 && !isMock) {
+    const dnsSpinner = ora('Verifying company domain mail servers (MX records)...').start();
+    const activeCompanies = [];
+    for (const company of companies) {
+      dnsSpinner.text = `Checking mail records for ${company.domain}...`;
+      const hasMail = await hasMailServer(company.domain);
+      if (hasMail) {
+        activeCompanies.push(company);
+      } else {
+        dnsSpinner.stop();
+        log.warn(`Skipping ${company.domain}: No active MX (mail exchange) records found.`);
+        dnsSpinner.start();
+      }
+    }
+    dnsSpinner.succeed(`MX record validation complete. ${activeCompanies.length}/${companies.length} domains are active email targets.`);
+    companies = activeCompanies;
+  }
+
   if (companies.length === 0) {
-    log.warn('No companies found. Exiting.');
+    log.warn('No active company domains found. Exiting.');
     return;
   }
 
   // Stage 2 & 3: Find contacts and enrich
   const enrichedLeads = [];
-  const leadSpinner = ora('Finding and enriching C-level/VP contacts...').start();
+  const linkedinInvites = [];
+  const leadSpinner = ora('Finding and enriching contacts...').start();
 
   try {
     for (const company of companies) {
@@ -131,9 +257,9 @@ async function runHeadlessPipeline() {
       
       let contacts = [];
       if (isMock) {
-        contacts = await mockFindContacts(company.domain, contactLimit);
+        contacts = await mockFindContacts(company.domain, contactLimit, seniorities, titles);
       } else {
-        contacts = await findContactsForDomain(company.domain, contactLimit);
+        contacts = await findContactsForDomain(company.domain, contactLimit, seniorities, titles);
       }
 
       for (const contact of contacts) {
@@ -148,11 +274,36 @@ async function runHeadlessPipeline() {
         }
 
         if (enriched && enriched.email) {
+          // Strict verification filtering
+          if (isStrict && enriched.emailStatus !== 'verified') {
+            leadSpinner.stop();
+            log.warn(`Skipping risky email for ${contact.firstName} ${contact.lastName} in Strict Mode (${enriched.emailStatus}).`);
+            
+            // Backup to LinkedIn Invite
+            const inviteNote = `Hi ${contact.firstName || ''}, I noticed you lead the team at ${company.name || ''} as ${contact.title || 'team lead'}. I'm an aspiring developer looking to contribute. Here is my GitHub: github.com/Benhur167. Let's connect!`.substring(0, 299);
+            linkedinInvites.push({
+              name: `${contact.firstName} ${contact.lastName}`,
+              profile: contact.linkedinUrl || `https://www.linkedin.com/search/results/people/?keywords=${encodeURIComponent(contact.firstName + ' ' + contact.lastName + ' ' + company.name)}`,
+              inviteNote
+            });
+            
+            leadSpinner.start();
+            continue;
+          }
+
           enrichedLeads.push({
             ...contact,
             email: enriched.email,
             emailStatus: enriched.emailStatus,
             linkedinUrl: enriched.linkedinUrl
+          });
+        } else {
+          // No email found - add as LinkedIn Invite backup
+          const inviteNote = `Hi ${contact.firstName || ''}, I noticed you lead the team at ${company.name || ''} as ${contact.title || 'team lead'}. I'm an aspiring developer looking to contribute. Here is my GitHub: github.com/Benhur167. Let's connect!`.substring(0, 299);
+          linkedinInvites.push({
+            name: `${contact.firstName} ${contact.lastName}`,
+            profile: contact.linkedinUrl || `https://www.linkedin.com/search/results/people/?keywords=${encodeURIComponent(contact.firstName + ' ' + contact.lastName + ' ' + company.name)}`,
+            inviteNote
           });
         }
       }
@@ -163,43 +314,55 @@ async function runHeadlessPipeline() {
     process.exit(1);
   }
 
-  if (enrichedLeads.length === 0) {
-    log.warn('No contact emails found. Exiting.');
-    return;
-  }
+  // Load sender personalization variables from environment
+  const senderDetails = {
+    senderName: process.env.BREVO_SENDER_NAME || 'Your Name',
+    senderGithub: process.env.SENDER_GITHUB || '',
+    senderPortfolio: process.env.SENDER_PORTFOLIO || '',
+    senderResumeLink: options.resumeUrl || process.env.SENDER_RESUME_LINK || ''
+  };
 
   // Load subject/template from environment
   const subjectTemplate = process.env.OUTREACH_SUBJECT || 'Quick question regarding <COMPANY_NAME>';
-  const bodyTemplate = process.env.OUTREACH_TEMPLATE || 'Hi <FIRST_NAME>,\n\nI noticed you are leading the team at <COMPANY_NAME> as <TITLE>. I\'d love to connect.\n\nBest,\nYour Name';
+  const bodyTemplate = process.env.OUTREACH_TEMPLATE || 'Hi <FIRST_NAME>,\n\nI noticed you are leading the team at <COMPANY_NAME> as <TITLE>. I\'d love to connect.\n\nBest,\n<SENDER_NAME>';
 
   // Output/Send Phase
-  if (autoSend) {
+  if (autoSend && enrichedLeads.length > 0) {
     const emailSpinner = ora(`Sending ${enrichedLeads.length} outreach emails...`).start();
     let sentCount = 0;
     try {
       for (const lead of enrichedLeads) {
-        const subject = compileTemplate(subjectTemplate, lead);
-        const bodyText = compileTemplate(bodyTemplate, lead);
+        const subject = compileTemplate(subjectTemplate, { ...lead, ...senderDetails });
+        const bodyText = compileTemplate(bodyTemplate, { ...lead, ...senderDetails });
+
+        const emailPayload = {
+          toEmail: lead.email,
+          toName: `${lead.firstName} ${lead.lastName}`,
+          subject,
+          bodyText
+        };
+        if (attachment) {
+          emailPayload.attachment = attachment;
+        }
 
         if (isMock) {
           emailSpinner.stop();
           await mockSendEmail(
-            { toEmail: lead.email, toName: `${lead.firstName} ${lead.lastName}`, subject, bodyText },
+            emailPayload,
             process.env.BREVO_SENDER_EMAIL || 'you@yourdomain.com',
             process.env.BREVO_SENDER_NAME || 'Your Name'
           );
           emailSpinner.start(`Sending outreach emails...`);
           sentCount++;
         } else {
-          const success = await sendColdEmail({
-            toEmail: lead.email,
-            toName: `${lead.firstName} ${lead.lastName}`,
-            subject,
-            bodyText
-          });
+          // Smart random throttle delay (3000ms - 6000ms)
+          const delay = Math.floor(Math.random() * (6000 - 3000 + 1)) + 3000;
+          emailSpinner.text = `Waiting ${Math.round(delay/1000)}s (SMTP throttle)...`;
+          await sleep(delay);
+
+          emailSpinner.text = `Sending email to ${lead.email}...`;
+          const success = await sendColdEmail(emailPayload);
           if (success) sentCount++;
-          // Rate-limit sleep (e.g. 1s between real emails)
-          await sleep(1000);
         }
       }
       emailSpinner.succeed(`Successfully sent ${sentCount} outreach emails.`);
@@ -207,7 +370,7 @@ async function runHeadlessPipeline() {
       emailSpinner.fail(`Failed to send emails: ${err.message}`);
       process.exit(1);
     }
-  } else {
+  } else if (enrichedLeads.length > 0) {
     // Output results to JSON since --send was not passed
     const outputPath = path.join(process.cwd(), 'outreach_leads.json');
     fs.writeFileSync(outputPath, JSON.stringify(enrichedLeads, null, 2));
@@ -216,8 +379,21 @@ async function runHeadlessPipeline() {
       Name: `${l.firstName} ${l.lastName}`,
       Title: l.title,
       Email: l.email,
+      Status: l.emailStatus,
       Company: l.companyName || l.domain,
       LinkedIn: l.linkedinUrl
+    })));
+  } else {
+    log.warn('No contact emails found to send or export.');
+  }
+
+  // Display LinkedIn invites if any leads failed email enrichment
+  if (linkedinInvites.length > 0) {
+    printHeader('LinkedIn Connection Invites (Email unavailable/risky)');
+    console.table(linkedinInvites.map(i => ({
+      Name: i.name,
+      Profile: i.profile,
+      'Invite Note (<300 chars)': i.inviteNote
     })));
   }
 }
@@ -310,20 +486,52 @@ async function runInteractivePipeline() {
     }
   }
 
-  if (companies.length === 0) {
-    log.warn('No companies discovered. Exiting.');
-    return;
-  }
-
   // Review Discovered Companies
   printHeader('Discovered Companies');
   companies.forEach((c, idx) => console.log(`${idx + 1}. ${chalk.bold(c.name)} (${chalk.cyan(c.domain)})`));
 
+  // Offline MX Record Validation (Skip in Mock Mode)
+  if (companies.length > 0 && !isMock) {
+    await sleep(350); // Let stream settle
+    const { verifyMX } = await inquirer.prompt([
+      {
+        type: 'confirm',
+        name: 'verifyMX',
+        message: 'Verify company domain MX records offline first to ensure their email servers are active?',
+        default: true
+      }
+    ]);
+
+    if (verifyMX) {
+      const dnsSpinner = ora('Verifying company domain mail servers (MX records)...').start();
+      const activeCompanies = [];
+      for (const company of companies) {
+        dnsSpinner.text = `Checking mail records for ${company.domain}...`;
+        const hasMail = await hasMailServer(company.domain);
+        if (hasMail) {
+          activeCompanies.push(company);
+        } else {
+          dnsSpinner.stop();
+          log.warn(`Skipping ${company.domain}: No active MX (mail exchange) records found.`);
+          dnsSpinner.start();
+        }
+      }
+      dnsSpinner.succeed(`MX record validation complete. ${activeCompanies.length}/${companies.length} domains are active email targets.`);
+      companies = activeCompanies;
+    }
+  }
+
+  if (companies.length === 0) {
+    log.warn('No active company domains found. Exiting.');
+    return;
+  }
+
+  await sleep(350); // Let stream settle
   const { proceedToEnrich } = await inquirer.prompt([
     {
       type: 'confirm',
+      message: 'Do you want to proceed with finding decision makers and their emails using Prospeo?',
       name: 'proceedToEnrich',
-      message: 'Do you want to proceed with finding decision makers (C-Level/VP) and their emails using Prospeo?',
       default: true
     }
   ]);
@@ -332,6 +540,152 @@ async function runInteractivePipeline() {
     log.info('Outreach canceled. Exiting.');
     return;
   }
+
+  // Target preset prompt
+  const { targetPresetKey } = await inquirer.prompt([
+    {
+      type: 'list',
+      name: 'targetPresetKey',
+      message: 'Choose who you want to target at these companies:',
+      choices: Object.entries(TARGET_PRESETS).map(([key, value]) => ({
+        name: value.name,
+        value: key
+      }))
+    }
+  ]);
+
+  let seniorities = [];
+  let titles = [];
+
+  if (targetPresetKey === 'custom') {
+    const customAnswers = await inquirer.prompt([
+      {
+        type: 'input',
+        name: 'senioritiesString',
+        message: 'Enter comma-separated seniorities (e.g. Founder/Owner, C-Suite, Manager, All):',
+        default: 'All'
+      },
+      {
+        type: 'input',
+        name: 'titlesString',
+        message: 'Enter comma-separated job titles to include (e.g. CTO, Software Engineer, All):',
+        default: 'All'
+      }
+    ]);
+    seniorities = customAnswers.senioritiesString.split(',').map(s => s.trim());
+    titles = customAnswers.titlesString.split(',').map(t => t.trim());
+  } else {
+    seniorities = TARGET_PRESETS[targetPresetKey].seniorities;
+    titles = TARGET_PRESETS[targetPresetKey].titles;
+  }
+
+  // Enforce Strict Verification Prompt
+  const { enforceStrict } = await inquirer.prompt([
+    {
+      type: 'confirm',
+      name: 'enforceStrict',
+      message: 'Enforce Strict Verification? (Discard "catch_all"/risky emails to guarantee 0% bounce rate)',
+      default: false
+    }
+  ]);
+
+  // Resume attachment prompt
+  const { resumeOption } = await inquirer.prompt([
+    {
+      type: 'list',
+      name: 'resumeOption',
+      message: 'Do you want to send a resume/portfolio with your outreach?',
+      choices: [
+        { name: 'No, I\'ll include a portfolio/resume link in my email body (Recommended for deliverability)', value: 'none' },
+        { name: 'Yes, attach a local PDF file', value: 'local' },
+        { name: 'Yes, attach a PDF from a public URL', value: 'url' }
+      ]
+    }
+  ]);
+
+  let attachment = null;
+  let senderResumeLink = '';
+
+  if (resumeOption === 'local') {
+    const { localPath } = await inquirer.prompt([
+      {
+        type: 'input',
+        name: 'localPath',
+        message: 'Enter the absolute path to your local PDF resume:',
+        validate: (input) => {
+          if (!input.trim()) return 'Path cannot be empty';
+          if (!fs.existsSync(path.resolve(input.trim()))) return 'File does not exist. Please enter a valid path.';
+          if (!input.trim().toLowerCase().endsWith('.pdf')) return 'Must be a PDF file';
+          return true;
+        }
+      }
+    ]);
+    try {
+      const resolvedPath = path.resolve(localPath.trim());
+      const fileContent = fs.readFileSync(resolvedPath).toString('base64');
+      attachment = {
+        content: fileContent,
+        name: path.basename(resolvedPath)
+      };
+      log.success(`Loaded local resume: ${path.basename(resolvedPath)}`);
+    } catch (err) {
+      log.error(`Failed to read resume file: ${err.message}`);
+    }
+  } else if (resumeOption === 'url') {
+    const { pdfUrl } = await inquirer.prompt([
+      {
+        type: 'input',
+        name: 'pdfUrl',
+        message: 'Enter the public URL to your PDF resume (e.g. Google Drive/Dropbox public link):',
+        validate: (input) => {
+          if (!input.trim()) return 'URL cannot be empty';
+          if (!input.trim().startsWith('http')) return 'Invalid URL';
+          return true;
+        }
+      }
+    ]);
+    attachment = {
+      url: pdfUrl.trim(),
+      name: 'resume.pdf'
+    };
+    senderResumeLink = pdfUrl.trim();
+  }
+
+  // Sender personal details prompt
+  printHeader('Your Personal Details');
+  const personalAnswers = await inquirer.prompt([
+    {
+      type: 'input',
+      name: 'senderName',
+      message: 'Your Name:',
+      default: process.env.BREVO_SENDER_NAME || 'Benhur'
+    },
+    {
+      type: 'input',
+      name: 'senderGithub',
+      message: 'Your GitHub URL:',
+      default: process.env.SENDER_GITHUB || 'https://github.com/Benhur167'
+    },
+    {
+      type: 'input',
+      name: 'senderPortfolio',
+      message: 'Your Portfolio URL / LinkedIn Profile (Optional):',
+      default: process.env.SENDER_PORTFOLIO || ''
+    },
+    {
+      type: 'input',
+      name: 'inlineResumeLink',
+      message: 'Your public Resume PDF Link (Used for inline templates. Optional):',
+      default: senderResumeLink || process.env.SENDER_RESUME_LINK || ''
+    }
+  ]);
+
+  const senderDetails = {
+    senderName: personalAnswers.senderName,
+    senderGithub: personalAnswers.senderGithub,
+    senderPortfolio: personalAnswers.senderPortfolio,
+    senderResumeLink: personalAnswers.inlineResumeLink
+  };
 
   const { contactLimit } = await inquirer.prompt([
     {
@@ -344,6 +698,7 @@ async function runInteractivePipeline() {
 
   // Stage 2 & 3: Find contacts and enrich emails
   const enrichedLeads = [];
+  const linkedinInvites = [];
   const leadSpinner = ora('Starting contact discovery & enrichment...').start();
 
   try {
@@ -352,9 +707,9 @@ async function runInteractivePipeline() {
       
       let contacts = [];
       if (isMock) {
-        contacts = await mockFindContacts(company.domain, contactLimit);
+        contacts = await mockFindContacts(company.domain, contactLimit, seniorities, titles);
       } else {
-        contacts = await findContactsForDomain(company.domain, contactLimit);
+        contacts = await findContactsForDomain(company.domain, contactLimit, seniorities, titles);
       }
 
       for (const contact of contacts) {
@@ -369,11 +724,36 @@ async function runInteractivePipeline() {
         }
 
         if (enriched && enriched.email) {
+          // Strict verification filtering
+          if (enforceStrict && enriched.emailStatus !== 'verified') {
+            leadSpinner.stop();
+            log.warn(`Skipping risky email for ${contact.firstName} ${contact.lastName} in Strict Mode (${enriched.emailStatus}).`);
+            
+            // Backup to LinkedIn Invite
+            const inviteNote = `Hi ${contact.firstName || ''}, I noticed you lead the team at ${company.name || ''} as ${contact.title || 'team lead'}. I'm an aspiring developer looking to contribute. Here is my GitHub: github.com/Benhur167. Let's connect!`.substring(0, 299);
+            linkedinInvites.push({
+              name: `${contact.firstName} ${contact.lastName}`,
+              profile: contact.linkedinUrl || `https://www.linkedin.com/search/results/people/?keywords=${encodeURIComponent(contact.firstName + ' ' + contact.lastName + ' ' + company.name)}`,
+              inviteNote
+            });
+            
+            leadSpinner.start();
+            continue;
+          }
+
           enrichedLeads.push({
             ...contact,
             email: enriched.email,
             emailStatus: enriched.emailStatus,
             linkedinUrl: enriched.linkedinUrl
+          });
+        } else {
+          // No email found - add as LinkedIn Invite backup
+          const inviteNote = `Hi ${contact.firstName || ''}, I noticed you lead the team at ${company.name || ''} as ${contact.title || 'team lead'}. I'm an aspiring developer looking to contribute. Here is my GitHub: github.com/Benhur167. Let's connect!`.substring(0, 299);
+          linkedinInvites.push({
+            name: `${contact.firstName} ${contact.lastName}`,
+            profile: contact.linkedinUrl || `https://www.linkedin.com/search/results/people/?keywords=${encodeURIComponent(contact.firstName + ' ' + contact.lastName + ' ' + company.name)}`,
+            inviteNote
           });
         }
       }
@@ -384,111 +764,160 @@ async function runInteractivePipeline() {
     return;
   }
 
-  if (enrichedLeads.length === 0) {
-    log.warn('No contact emails found. Exiting.');
-    return;
+  // Display Table of Leads if any found
+  if (enrichedLeads.length > 0) {
+    printHeader('Enriched Leads');
+    console.table(enrichedLeads.map(l => ({
+      Name: `${l.firstName} ${l.lastName}`,
+      Title: l.title,
+      Email: l.email,
+      Status: l.emailStatus,
+      Company: l.companyName || l.domain,
+      LinkedIn: l.linkedinUrl
+    })));
+  } else {
+    log.warn('No verified contact emails found.');
   }
-
-  // Display Table of Leads
-  printHeader('Enriched Leads');
-  console.table(enrichedLeads.map(l => ({
-    Name: `${l.firstName} ${l.lastName}`,
-    Title: l.title,
-    Email: l.email,
-    Company: l.companyName || l.domain,
-    LinkedIn: l.linkedinUrl
-  })));
 
   // 4. Configure / Confirm Email Template
   printHeader('Outreach Template Configuration');
-  const defaultSubject = process.env.OUTREACH_SUBJECT || 'Quick question regarding <COMPANY_NAME>';
-  const defaultBody = process.env.OUTREACH_TEMPLATE || 'Hi <FIRST_NAME>,\n\nI noticed you are leading the team at <COMPANY_NAME> as <TITLE>. I\'d love to connect.\n\nBest,\nYour Name';
 
-  await sleep(350); // Let stdin buffer settle on Windows
-  const { editTemplate } = await inquirer.prompt([
+  await sleep(350); // Let stream settle
+  // Select from template library
+  const { chosenTemplateIndex } = await inquirer.prompt([
     {
-      type: 'confirm',
-      name: 'editTemplate',
-      message: 'Do you want to review and edit the outreach email template?',
-      default: false
+      type: 'list',
+      name: 'chosenTemplateIndex',
+      message: 'Select an outreach email template to customize:',
+      choices: [
+        ...TEMPLATE_LIBRARY.map((t, idx) => ({ name: t.name, value: idx })),
+        { name: 'Custom Template (Write your own in terminal)', value: -1 }
+      ]
     }
   ]);
 
-  let subjectTemplate = defaultSubject;
-  let bodyTemplate = defaultBody;
+  let subjectTemplate = '';
+  let bodyTemplate = '';
 
-  if (editTemplate) {
-    const templateAnswers = await inquirer.prompt([
+  if (chosenTemplateIndex === -1) {
+    const customTemplate = await inquirer.prompt([
       {
         type: 'input',
         name: 'subject',
         message: 'Outreach Subject Template (supports <COMPANY_NAME>):',
-        default: defaultSubject
+        default: 'Quick question regarding <COMPANY_NAME>'
       },
       {
         type: 'editor',
         name: 'body',
-        message: 'Outreach Body Template (supports <FIRST_NAME>, <LAST_NAME>, <COMPANY_NAME>, <TITLE>):',
-        default: defaultBody
+        message: 'Outreach Body Template (supports <FIRST_NAME>, <LAST_NAME>, <COMPANY_NAME>, <TITLE>, <SENDER_NAME>, <SENDER_GITHUB>, <SENDER_PORTFOLIO>, <SENDER_RESUME_LINK>):',
+        default: 'Hi <FIRST_NAME>,\n\nI noticed you are leading the team at <COMPANY_NAME> as <TITLE>. I\'d love to connect.\n\nBest,\n<SENDER_NAME>'
       }
     ]);
-    subjectTemplate = templateAnswers.subject;
-    bodyTemplate = templateAnswers.body;
+    subjectTemplate = customTemplate.subject;
+    bodyTemplate = customTemplate.body;
+  } else {
+    const selTemplate = TEMPLATE_LIBRARY[chosenTemplateIndex];
+    subjectTemplate = selTemplate.subject;
+    bodyTemplate = selTemplate.body;
+
+    await sleep(350); // Let stream settle
+    const { editTemplate } = await inquirer.prompt([
+      {
+        type: 'confirm',
+        name: 'editTemplate',
+        message: 'Do you want to review and edit the selected template text?',
+        default: false
+      }
+    ]);
+
+    if (editTemplate) {
+      const edited = await inquirer.prompt([
+        {
+          type: 'input',
+          name: 'subject',
+          message: 'Subject Template:',
+          default: subjectTemplate
+        },
+        {
+          type: 'editor',
+          name: 'body',
+          message: 'Body Template:',
+          default: bodyTemplate
+        }
+      ]);
+      subjectTemplate = edited.subject;
+      bodyTemplate = edited.body;
+    }
   }
 
-  // Preview the first compiled email
-  printHeader('Preview First Email');
-  const sampleLead = enrichedLeads[0];
-  console.log(chalk.bold('Subject: ') + compileTemplate(subjectTemplate, sampleLead));
-  console.log(chalk.bold('Body:\n') + compileTemplate(bodyTemplate, sampleLead));
-  console.log(chalk.cyan('===================================================='));
+  // Preview first compiled email if we have any leads
+  if (enrichedLeads.length > 0) {
+    printHeader('Preview First Email');
+    const sampleLead = enrichedLeads[0];
+    console.log(chalk.bold('Subject: ') + compileTemplate(subjectTemplate, { ...sampleLead, ...senderDetails }));
+    console.log(chalk.bold('Body:\n') + compileTemplate(bodyTemplate, { ...sampleLead, ...senderDetails }));
+    console.log(chalk.cyan('===================================================='));
+  }
 
   // 5. Send Cold Email outreach
-  await sleep(350); // Let stdin buffer settle on Windows
-  const { sendOutreach } = await inquirer.prompt([
-    {
-      type: 'confirm',
-      name: 'sendOutreach',
-      message: `Do you want to send cold email outreach to these ${enrichedLeads.length} contacts now?`,
-      default: false
-    }
-  ]);
+  let sendOutreach = false;
+  if (enrichedLeads.length > 0) {
+    await sleep(350); // Let stdin buffer settle on Windows
+    const confirmSend = await inquirer.prompt([
+      {
+        type: 'confirm',
+        name: 'sendOutreach',
+        message: `Do you want to send cold email outreach to these ${enrichedLeads.length} contacts now?`,
+        default: false
+      }
+    ]);
+    sendOutreach = confirmSend.sendOutreach;
+  }
 
-  if (sendOutreach) {
+  if (sendOutreach && enrichedLeads.length > 0) {
     const emailSpinner = ora('Initiating outbound email queue...').start();
     let sentCount = 0;
     try {
       for (const lead of enrichedLeads) {
-        const subject = compileTemplate(subjectTemplate, lead);
-        const bodyText = compileTemplate(bodyTemplate, lead);
+        const subject = compileTemplate(subjectTemplate, { ...lead, ...senderDetails });
+        const bodyText = compileTemplate(bodyTemplate, { ...lead, ...senderDetails });
+
+        const emailPayload = {
+          toEmail: lead.email,
+          toName: `${lead.firstName} ${lead.lastName}`,
+          subject,
+          bodyText
+        };
+        if (attachment) {
+          emailPayload.attachment = attachment;
+        }
 
         if (isMock) {
           emailSpinner.stop();
           await mockSendEmail(
-            { toEmail: lead.email, toName: `${lead.firstName} ${lead.lastName}`, subject, bodyText },
+            emailPayload,
             process.env.BREVO_SENDER_EMAIL || 'you@yourdomain.com',
             process.env.BREVO_SENDER_NAME || 'Your Name'
           );
           emailSpinner.start('Sending outreach emails...');
           sentCount++;
         } else {
+          // Smart randomized SMTP throttle delay (3000ms - 6000ms)
+          const delay = Math.floor(Math.random() * (6000 - 3000 + 1)) + 3000;
+          emailSpinner.text = `Waiting ${Math.round(delay/1000)}s (SMTP throttle)...`;
+          await sleep(delay);
+
           emailSpinner.text = `Sending email to ${lead.email}...`;
-          const success = await sendColdEmail({
-            toEmail: lead.email,
-            toName: `${lead.firstName} ${lead.lastName}`,
-            subject,
-            bodyText
-          });
+          const success = await sendColdEmail(emailPayload);
           if (success) sentCount++;
-          // Rate-limiting delay for real APIs
-          await sleep(1000);
         }
       }
       emailSpinner.succeed(`Outreach Campaign completed. Successfully sent ${sentCount} cold emails.`);
     } catch (err) {
       emailSpinner.fail(`Failed during mailing stage: ${err.message}`);
     }
-  } else {
+  } else if (enrichedLeads.length > 0) {
     // If they choose not to send, export to json file
     const outputPath = path.join(process.cwd(), 'outreach_leads.json');
     fs.writeFileSync(outputPath, JSON.stringify(enrichedLeads, null, 2));
@@ -496,8 +925,16 @@ async function runInteractivePipeline() {
     log.info('You can review or import this database into your outbound mailing tools later.');
   }
 
-  printHeader('Pipeline Session Finished');
-  log.success('Thank you for using Cold Outreach Pipeline CLI!');
+  // Display LinkedIn Invite table for contacts without emails / risky emails
+  if (linkedinInvites.length > 0) {
+    printHeader('LinkedIn Connection Invites (Email unavailable/risky)');
+    console.table(linkedinInvites.map(i => ({
+      Name: i.name,
+      Profile: i.profile,
+      'Invite Note (<300 chars)': i.inviteNote
+    })));
+    log.info('Copy these invite notes and connect with them directly on LinkedIn to secure responses!');
+  }
 }
 
 main().catch(err => {

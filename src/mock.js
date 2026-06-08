@@ -55,11 +55,45 @@ export async function mockSearchCompanies(query, limit = 5, provider = 'apollo')
 /**
  * Simulates finding contacts (Stage 2)
  */
-export async function mockFindContacts(domain, limit = 2) {
+export async function mockFindContacts(domain, limit = 2, seniorities = [], titles = []) {
   await sleep(800); // Simulate API latency
-  log.info(`[MOCK] Fetching C-Level/VP decision makers at domain: ${domain}`);
   
-  const contacts = MOCK_CONTACTS[domain] || getFallbackContacts(domain);
+  let filterDesc = 'all employees';
+  if (seniorities.length > 0 && !seniorities.includes('All')) {
+    filterDesc = `seniority: [${seniorities.join(', ')}]`;
+  }
+  if (titles.length > 0 && !titles.includes('All')) {
+    filterDesc += (filterDesc === 'all employees' ? '' : ', ') + `titles: [${titles.join(', ')}]`;
+  }
+
+  log.info(`[MOCK] Fetching contacts at domain: ${domain} (Filter: ${filterDesc})`);
+  
+  // Generate contextually realistic mock contacts based on filters
+  const hasHR = titles.some(t => /recruit|talent|hr/i.test(t));
+  const hasEng = titles.some(t => /engineer|developer|cto|lead/i.test(t));
+  const hasFounder = titles.some(t => /founder|ceo|president/i.test(t));
+
+  let contacts = [];
+  if (hasHR) {
+    contacts = [
+      { firstName: 'Alice', lastName: 'Recruiter', title: 'Talent Acquisition Partner', linkedinUrl: `https://www.linkedin.com/in/alicerecruiter-${domain.split('.')[0]}`, companyName: domain.split('.')[0].toUpperCase() + ' Corp', domain },
+      { firstName: 'Emma', lastName: 'HR', title: 'HR Executive', linkedinUrl: `https://www.linkedin.com/in/emmahr-${domain.split('.')[0]}`, companyName: domain.split('.')[0].toUpperCase() + ' Corp', domain }
+    ];
+  } else if (hasEng) {
+    contacts = [
+      { firstName: 'Bob', lastName: 'Developer', title: 'Lead Web Developer', linkedinUrl: `https://www.linkedin.com/in/bobdeveloper-${domain.split('.')[0]}`, companyName: domain.split('.')[0].toUpperCase() + ' Corp', domain },
+      { firstName: 'Charlie', lastName: 'Coder', title: 'Senior Android Engineer', linkedinUrl: `https://www.linkedin.com/in/charliecoder-${domain.split('.')[0]}`, companyName: domain.split('.')[0].toUpperCase() + ' Corp', domain }
+    ];
+  } else if (hasFounder) {
+    contacts = [
+      { firstName: 'Dave', lastName: 'Founder', title: 'Co-Founder & CEO', linkedinUrl: `https://www.linkedin.com/in/davefounder-${domain.split('.')[0]}`, companyName: domain.split('.')[0].toUpperCase() + ' Corp', domain },
+      { firstName: 'Sarah', lastName: 'Startup', title: 'Co-Founder & CTO', linkedinUrl: `https://www.linkedin.com/in/sarahstartup-${domain.split('.')[0]}`, companyName: domain.split('.')[0].toUpperCase() + ' Corp', domain }
+    ];
+  } else {
+    const companyName = domain.split('.')[0].charAt(0).toUpperCase() + domain.split('.')[0].slice(1) + ' Corp';
+    contacts = MOCK_CONTACTS[domain] || getFallbackContacts(domain);
+  }
+
   return contacts.slice(0, limit);
 }
 
@@ -73,9 +107,12 @@ export async function mockEnrichContact(contact) {
   // Generate a mock email address
   const email = `${contact.firstName.toLowerCase()}.${contact.lastName.toLowerCase()}@${contact.domain}`;
   
+  // Bob and Emma will return catch_all to demonstrate strict filtering
+  const status = (contact.firstName === 'Bob' || contact.firstName === 'Emma') ? 'catch_all' : 'verified';
+
   return {
     email,
-    emailStatus: 'verified',
+    emailStatus: status,
     linkedinUrl: contact.linkedinUrl || `https://www.linkedin.com/in/${contact.firstName.toLowerCase()}${contact.lastName.toLowerCase()}`,
     firstName: contact.firstName,
     lastName: contact.lastName
@@ -94,6 +131,14 @@ export async function mockSendEmail(emailDetails, senderEmail, senderName) {
   console.log(chalk.yellow('│ ') + chalk.bold('From:    ') + `${senderName} <${senderEmail}>`);
   console.log(chalk.yellow('│ ') + chalk.bold('To:      ') + `${emailDetails.toName} <${emailDetails.toEmail}>`);
   console.log(chalk.yellow('│ ') + chalk.bold('Subject: ') + emailDetails.subject);
+  
+  if (emailDetails.attachment) {
+    const attachArr = Array.isArray(emailDetails.attachment) ? emailDetails.attachment : [emailDetails.attachment];
+    const names = attachArr.map(a => a.name).join(', ');
+    const source = attachArr.map(a => a.url ? `URL: ${a.url}` : `Base64 (Length: ${a.content.length} chars)`).join(', ');
+    console.log(chalk.yellow('│ ') + chalk.bold('Attach:  ') + `${names} [${source}]`);
+  }
+  
   console.log(chalk.yellow('├──────────────────────────────────────────────────────────'));
   
   // Format body output
