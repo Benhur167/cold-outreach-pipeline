@@ -5,6 +5,7 @@ import ora from 'ora';
 import fs from 'fs';
 import path from 'path';
 import 'dotenv/config';
+import axios from 'axios';
 
 import {
   log,
@@ -119,6 +120,50 @@ const TEMPLATE_LIBRARY = [
   }
 ];
 
+
+/**
+ * Converts a Google Drive link to a direct download link if applicable.
+ */
+export function convertToDirectLink(url) {
+  if (!url) return '';
+  if (url.includes('drive.google.com')) {
+    const match = url.match(/\/file\/d\/([a-zA-Z0-9_-]+)/);
+    if (match && match[1]) {
+      return `https://drive.google.com/uc?export=download&id=${match[1]}`;
+    }
+  }
+  return url;
+}
+
+/**
+ * Downloads a remote file and converts it to a base64 attachment object for Brevo.
+ */
+export async function resolveUrlAttachment(url, filename = 'resume.pdf') {
+  const convertedUrl = convertToDirectLink(url);
+  try {
+    const response = await axios.get(convertedUrl, { 
+      responseType: 'arraybuffer',
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+      }
+    });
+    
+    // Check if the response content is HTML (meaning Google Drive returned a preview page instead of direct download)
+    const contentType = response.headers['content-type'] || '';
+    if (contentType.includes('text/html')) {
+      throw new Error('URL returned an HTML webpage instead of a binary PDF. Please make sure your Google Drive link is shared publicly.');
+    }
+    
+    const base64Content = Buffer.from(response.data).toString('base64');
+    return {
+      content: base64Content,
+      name: filename
+    };
+  } catch (err) {
+    throw new Error(`Failed to retrieve file from URL: ${err.message}`);
+  }
+}
+
 async function main() {
   printBanner();
 
@@ -175,11 +220,13 @@ async function runHeadlessPipeline() {
       process.exit(1);
     }
   } else if (options.resumeUrl) {
-    attachment = {
-      url: options.resumeUrl,
-      name: path.basename(options.resumeUrl) || 'resume.pdf'
-    };
-    log.info(`Using remote resume URL: ${options.resumeUrl}`);
+    try {
+      attachment = await resolveUrlAttachment(options.resumeUrl, 'resume.pdf');
+      log.info(`Using remote resume URL: ${options.resumeUrl} (Resolved to Base64)`);
+    } catch (err) {
+      log.error(`Failed to load remote resume from URL: ${err.message}`);
+      process.exit(1);
+    }
   }
 
   let companies = [];
@@ -429,11 +476,14 @@ async function runSmtpTest() {
   let attachment = null;
   if (answers.attachResume) {
     if (process.env.SENDER_RESUME_LINK && process.env.SENDER_RESUME_LINK.startsWith('http')) {
-      attachment = {
-        url: process.env.SENDER_RESUME_LINK,
-        name: 'resume.pdf'
-      };
-      log.info(`Using remote resume URL from .env: ${process.env.SENDER_RESUME_LINK}`);
+      const fetchSpinner = ora('Downloading and converting resume PDF...').start();
+      try {
+        attachment = await resolveUrlAttachment(process.env.SENDER_RESUME_LINK, 'resume.pdf');
+        fetchSpinner.succeed('Successfully downloaded and resolved resume to Base64.');
+      } catch (err) {
+        fetchSpinner.fail(`Failed to load remote resume: ${err.message}`);
+        log.warn('Proceeding to send test email without attachment.');
+      }
     } else {
       log.warn('No valid SENDER_RESUME_LINK found in .env. Sending without attachment.');
     }
@@ -724,10 +774,14 @@ async function runInteractivePipeline() {
         }
       }
     ]);
-    attachment = {
-      url: pdfUrl.trim(),
-      name: 'resume.pdf'
-    };
+    const fetchSpinner = ora('Downloading and converting remote PDF resume...').start();
+    try {
+      attachment = await resolveUrlAttachment(pdfUrl.trim(), 'resume.pdf');
+      fetchSpinner.succeed('Successfully downloaded and resolved remote resume to Base64.');
+    } catch (err) {
+      fetchSpinner.fail(`Failed to load remote resume: ${err.message}`);
+      log.warn('Proceeding without email attachment (it will still be linked in the text).');
+    }
     senderResumeLink = pdfUrl.trim();
   }
 
