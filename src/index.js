@@ -13,6 +13,7 @@ import {
   sleep,
   cleanDomain,
   isValidDomain,
+  isValidEmail,
   hasMailServer
 } from './utils.js';
 
@@ -397,6 +398,79 @@ async function runHeadlessPipeline() {
     })));
   }
 }
+/**
+ * Sends a real test email to check Brevo SMTP key, sender setup, and portfolio formatting.
+ */
+async function runSmtpTest() {
+  printHeader('Brevo SMTP Verification Test');
+  
+  const defaultRecipient = process.env.BREVO_SENDER_EMAIL || '';
+  if (!defaultRecipient) {
+    log.error('BREVO_SENDER_EMAIL is not set in your .env file. Please set it before testing.');
+    return;
+  }
+
+  const answers = await inquirer.prompt([
+    {
+      type: 'input',
+      name: 'recipient',
+      message: 'Enter test recipient email address:',
+      default: defaultRecipient,
+      validate: (input) => isValidEmail(input.trim()) ? true : 'Invalid email address'
+    },
+    {
+      type: 'confirm',
+      name: 'attachResume',
+      message: 'Do you want to test sending the resume attachment too?',
+      default: false
+    }
+  ]);
+
+  let attachment = null;
+  if (answers.attachResume) {
+    if (process.env.SENDER_RESUME_LINK && process.env.SENDER_RESUME_LINK.startsWith('http')) {
+      attachment = {
+        url: process.env.SENDER_RESUME_LINK,
+        name: 'resume.pdf'
+      };
+      log.info(`Using remote resume URL from .env: ${process.env.SENDER_RESUME_LINK}`);
+    } else {
+      log.warn('No valid SENDER_RESUME_LINK found in .env. Sending without attachment.');
+    }
+  }
+
+  const senderDetails = {
+    senderName: process.env.BREVO_SENDER_NAME || 'Benhur',
+    senderGithub: process.env.SENDER_GITHUB || 'https://github.com/Benhur167',
+    senderPortfolio: process.env.SENDER_PORTFOLIO || 'https://portfolio-three-nu-ahd12rnfpa.vercel.app',
+    senderResumeLink: process.env.SENDER_RESUME_LINK || ''
+  };
+
+  const subject = `Cold Outreach SMTP Test - Working Opportunity Pipeline`;
+  const bodyText = `Hi there,\n\nThis is a real-time verification email sent via your Cold Outreach Pipeline CLI.\n\nYour SMTP settings are working perfectly!\n\nHere is a check of your personal profile placeholders:\n- GitHub: ${senderDetails.senderGithub}\n- Portfolio: ${senderDetails.senderPortfolio}\n- Resume Link: ${senderDetails.senderResumeLink || 'Not configured'}\n\nBest,\n${senderDetails.senderName}`;
+
+  const spinner = ora(`Sending test email to ${answers.recipient}...`).start();
+  try {
+    const emailPayload = {
+      toEmail: answers.recipient,
+      toName: senderDetails.senderName,
+      subject,
+      bodyText
+    };
+    if (attachment) {
+      emailPayload.attachment = attachment;
+    }
+
+    const success = await sendColdEmail(emailPayload);
+    if (success) {
+      spinner.succeed(`Success! Test email sent successfully to ${answers.recipient}. Please check your inbox/spam folder.`);
+    } else {
+      spinner.fail('Brevo API returned a non-success code.');
+    }
+  } catch (err) {
+    spinner.fail(`SMTP Verification failed: ${err.message}`);
+  }
+}
 
 /**
  * Runs the interactive terminal UI wizard.
@@ -410,10 +484,16 @@ async function runInteractivePipeline() {
       message: 'Select pipeline execution mode:',
       choices: [
         { name: 'Mock Mode (Simulation, no API keys needed)', value: 'mock' },
-        { name: 'Production Mode (Uses real API credentials from .env)', value: 'production' }
+        { name: 'Production Mode (Uses real API credentials from .env)', value: 'production' },
+        { name: 'Verify Brevo SMTP Setup (Send a real test email to yourself)', value: 'test_smtp' }
       ]
     }
   ]);
+
+  if (mode === 'test_smtp') {
+    await runSmtpTest();
+    return;
+  }
 
   const isMock = mode === 'mock';
 
