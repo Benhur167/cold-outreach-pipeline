@@ -42,10 +42,14 @@ export async function mockSearchCompanies(query, limit = 5, provider = 'apollo')
   await sleep(1000); // Simulate API latency
   log.info(`[MOCK] Searching companies on ${provider.toUpperCase()} matching keyword: "${query}"`);
   
-  // Filter or return mock companies
+  const keywords = query.split(',').map(k => k.trim().toLowerCase()).filter(Boolean);
+  
+  // Filter or return mock companies matching any keyword
   const filtered = MOCK_COMPANIES.filter(c => 
-    c.name.toLowerCase().includes(query.toLowerCase()) || 
-    c.domain.toLowerCase().includes(query.toLowerCase())
+    keywords.some(k => 
+      c.name.toLowerCase().includes(k) || 
+      c.domain.toLowerCase().includes(k)
+    )
   );
   
   const results = filtered.length > 0 ? filtered : MOCK_COMPANIES;

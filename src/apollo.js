@@ -17,8 +17,9 @@ export async function searchCompanies(query, limit = 10, apiKey) {
   }
 
   // Construct search payload for Apollo.io
+  const tags = query.split(',').map(t => t.trim()).filter(Boolean);
   const payload = {
-    q_organization_keyword_tags: [query],
+    q_organization_keyword_tags: tags,
     page: 1,
     per_page: limit
   };

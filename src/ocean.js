@@ -18,11 +18,12 @@ export async function searchCompanies(query, limit = 10, apiKey, apiUrl) {
   }
 
   // Construct search payload based on user's query
+  const keywords = query.split(',').map(t => t.trim()).filter(Boolean);
   const payload = {
     size: limit,
     companiesFilters: {
       keywords: {
-        include: [query]
+        include: keywords
       }
     }
   };
