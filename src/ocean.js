@@ -24,8 +24,7 @@ export async function searchCompanies(query, limit = 10, apiKey, apiUrl) {
     size: limit,
     companiesFilters: {
       keywords: {
-        values: keywords,
-        operator: 'anyOf'
+        anyOf: keywords
       }
     }
   };
@@ -38,14 +37,13 @@ export async function searchCompanies(query, limit = 10, apiKey, apiUrl) {
       }
     });
 
-    // Parse response
-    // Ocean.io usually returns results in response.data.results or response.data.companies
     const results = response.data?.results || response.data?.companies || response.data || [];
     
     return results.map(item => {
-      // Safely extract domain and company name
-      const name = item.name || item.companyName || 'Unknown Company';
-      const domain = item.domain || item.website || item.websiteUrl || '';
+      // Safely extract domain and company name, checking if nested under company key
+      const company = item.company || item;
+      const name = company.name || company.companyName || 'Unknown Company';
+      const domain = company.domain || company.website || company.websiteUrl || '';
       return { name, domain };
     }).filter(company => company.domain); // Only return companies that have a domain
 
