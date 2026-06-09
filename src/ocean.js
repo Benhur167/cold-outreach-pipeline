@@ -23,7 +23,8 @@ export async function searchCompanies(query, limit = 10, apiKey, apiUrl) {
     size: limit,
     companiesFilters: {
       keywords: {
-        include: keywords
+        values: keywords,
+        operator: 'anyOf'
       }
     }
   };
