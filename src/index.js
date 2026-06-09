@@ -314,11 +314,17 @@ async function runHeadlessPipeline() {
         leadSpinner.text = `Enriching contact ${contact.firstName} ${contact.lastName} (${company.name})...`;
         
         let enriched = null;
-        if (isMock) {
-          enriched = await mockEnrichContact(contact);
-        } else {
-          enriched = await enrichContact(contact);
-          await sleep(1500); // 1.5s delay to avoid Prospeo rate limits (1 req/sec)
+        try {
+          if (isMock) {
+            enriched = await mockEnrichContact(contact);
+          } else {
+            enriched = await enrichContact(contact);
+            await sleep(1500); // 1.5s delay to avoid Prospeo rate limits (1 req/sec)
+          }
+        } catch (enrichErr) {
+          leadSpinner.stop();
+          log.warn(`Skipping email enrichment for ${contact.firstName} ${contact.lastName}: ${enrichErr.message}`);
+          leadSpinner.start();
         }
 
         if (enriched && enriched.email) {
@@ -850,11 +856,17 @@ async function runInteractivePipeline() {
         leadSpinner.text = `Enriching email for ${contact.firstName} ${contact.lastName}...`;
         
         let enriched = null;
-        if (isMock) {
-          enriched = await mockEnrichContact(contact);
-        } else {
-          enriched = await enrichContact(contact);
-          await sleep(1500); // 1.5s delay to avoid Prospeo rate limits (1 req/sec)
+        try {
+          if (isMock) {
+            enriched = await mockEnrichContact(contact);
+          } else {
+            enriched = await enrichContact(contact);
+            await sleep(1500); // 1.5s delay to avoid Prospeo rate limits (1 req/sec)
+          }
+        } catch (enrichErr) {
+          leadSpinner.stop();
+          log.warn(`Skipping email enrichment for ${contact.firstName} ${contact.lastName}: ${enrichErr.message}`);
+          leadSpinner.start();
         }
 
         if (enriched && enriched.email) {
