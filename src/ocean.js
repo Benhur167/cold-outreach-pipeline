@@ -22,10 +22,8 @@ export async function searchCompanies(query, limit = 10, apiKey, apiUrl) {
   const payload = {
     size: limit,
     companiesFilters: {
-      keywords: {
-        values: keywords,
-        operator: 'anyOf'
-      }
+      keywords: keywords,
+      keywordsOperator: 'Any of'
     }
   };
 
