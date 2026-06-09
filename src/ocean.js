@@ -1,4 +1,5 @@
 import axios from 'axios';
+import chalk from 'chalk';
 import { log } from './utils.js';
 
 /**
@@ -47,6 +48,9 @@ export async function searchCompanies(query, limit = 10, apiKey, apiUrl) {
     }).filter(company => company.domain); // Only return companies that have a domain
 
   } catch (error) {
+    if (error.response?.data) {
+      console.error(chalk.red("Ocean.io Error Payload:"), JSON.stringify(error.response.data, null, 2));
+    }
     const errorMsg = error.response?.data?.message || error.response?.data?.error || error.message;
     log.error(`Ocean.io API Request failed: ${errorMsg}`);
     throw new Error(`Ocean.io search failed: ${errorMsg}`);
