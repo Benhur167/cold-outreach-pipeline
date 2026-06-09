@@ -304,10 +304,17 @@ async function runHeadlessPipeline() {
       leadSpinner.text = `Fetching contacts for ${company.name} (${company.domain})...`;
       
       let contacts = [];
-      if (isMock) {
-        contacts = await mockFindContacts(company.domain, contactLimit, seniorities, titles);
-      } else {
-        contacts = await findContactsForDomain(company.domain, contactLimit, seniorities, titles);
+      try {
+        if (isMock) {
+          contacts = await mockFindContacts(company.domain, contactLimit, seniorities, titles);
+        } else {
+          contacts = await findContactsForDomain(company.domain, contactLimit, seniorities, titles);
+        }
+      } catch (searchErr) {
+        leadSpinner.stop();
+        log.warn(`Skipping contact search for ${company.name} (${company.domain}): ${searchErr.message}`);
+        leadSpinner.start();
+        continue;
       }
 
       for (const contact of contacts) {
@@ -846,10 +853,17 @@ async function runInteractivePipeline() {
       leadSpinner.text = `Searching contacts at ${company.domain}...`;
       
       let contacts = [];
-      if (isMock) {
-        contacts = await mockFindContacts(company.domain, contactLimit, seniorities, titles);
-      } else {
-        contacts = await findContactsForDomain(company.domain, contactLimit, seniorities, titles);
+      try {
+        if (isMock) {
+          contacts = await mockFindContacts(company.domain, contactLimit, seniorities, titles);
+        } else {
+          contacts = await findContactsForDomain(company.domain, contactLimit, seniorities, titles);
+        }
+      } catch (searchErr) {
+        leadSpinner.stop();
+        log.warn(`Skipping contact search for ${company.domain}: ${searchErr.message}`);
+        leadSpinner.start();
+        continue;
       }
 
       for (const contact of contacts) {
