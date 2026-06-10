@@ -53,7 +53,8 @@ program
   .option('--resume-url <url>', 'URL of a public PDF resume to attach')
   .option('--strict', 'Strict mode: only send to 100% verified emails (exclude catch_all)')
   .option('--jobs-category <category>', 'Job category for discovery (default: "Software Engineering")')
-  .option('--jobs-level <level>', 'Career seniority level for discovery (default: "Internship")');
+  .option('--jobs-level <level>', 'Career seniority level for discovery (default: "Internship")')
+  .option('--jobs-location <location>', 'Job location for discovery (e.g. "India", "Remote")');
 
 program.parse(process.argv);
 const options = program.opts();
@@ -324,9 +325,10 @@ async function runHeadlessPipeline() {
   } else if (provider === 'jobs') {
     const jobsCategory = options.jobsCategory || 'Software Engineering';
     const jobsLevel = options.jobsLevel || 'Internship';
-    const spinner = ora(`Discovering hiring companies for "${jobsCategory}" ("${jobsLevel}")...`).start();
+    const jobsLocation = options.jobsLocation || '';
+    const spinner = ora(`Discovering hiring companies for "${jobsCategory}" ("${jobsLevel}"${jobsLocation ? `, "${jobsLocation}"` : ''})...`).start();
     try {
-      const discovered = await discoverHiringCompanies(jobsCategory, jobsLevel, limit, isMock);
+      const discovered = await discoverHiringCompanies(jobsCategory, jobsLevel, jobsLocation, limit, isMock);
       spinner.succeed(`Discovered ${discovered.length} hiring companies.`);
       
       const resolveSpinner = ora('Resolving domains for discovered companies...').start();
@@ -694,7 +696,7 @@ async function runInteractivePipeline() {
       return { name: cleaned.split('.')[0].charAt(0).toUpperCase() + cleaned.split('.')[0].slice(1), domain: cleaned };
     });
   } else if (provider === 'jobs') {
-    const { category, level, limit } = await inquirer.prompt([
+    const { category, level, location, limit } = await inquirer.prompt([
       {
         type: 'list',
         name: 'category',
@@ -720,6 +722,12 @@ async function runInteractivePipeline() {
         default: 'Internship'
       },
       {
+        type: 'input',
+        name: 'location',
+        message: 'Enter target location (e.g., "India", "Remote", or leave empty for all):',
+        default: ''
+      },
+      {
         type: 'number',
         name: 'limit',
         message: 'Max hiring companies to discover:',
@@ -727,9 +735,9 @@ async function runInteractivePipeline() {
       }
     ]);
 
-    const spinner = ora(`Searching active listings for "${category}" at "${level}" level...`).start();
+    const spinner = ora(`Searching active listings for "${category}" at "${level}" level${location ? ` in "${location}"` : ''}...`).start();
     try {
-      const discovered = await discoverHiringCompanies(category, level, limit, isMock);
+      const discovered = await discoverHiringCompanies(category, level, location, limit, isMock);
       spinner.succeed(`Discovered ${discovered.length} hiring companies.`);
       
       const resolveSpinner = ora('Resolving company domains...').start();

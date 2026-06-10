@@ -13,9 +13,9 @@ import { searchCompanies as oceanSearch } from './ocean.js';
  * @param {boolean} isMock - True to run in mock simulation mode
  * @returns {Promise<Array<{name: string, jobTitle: string, source: string}>>}
  */
-export async function discoverHiringCompanies(category = 'Software Engineering', level = 'Internship', limit = 5, isMock = false) {
+export async function discoverHiringCompanies(category = 'Software Engineering', level = 'Internship', location = '', limit = 5, isMock = false) {
   if (isMock) {
-    log.info(`[Mock] Simulating active job search for "${category}" at "${level}" level...`);
+    log.info(`[Mock] Simulating active job search for "${category}" at "${level}" level in location "${location || 'All'}"...`);
     return [
       { name: 'Coursera', jobTitle: 'Software Engineering Intern', source: 'The Muse (Mock)' },
       { name: 'Cloudflare', jobTitle: 'SDE Intern, Infrastructure', source: 'The Muse (Mock)' },
@@ -29,21 +29,36 @@ export async function discoverHiringCompanies(category = 'Software Engineering',
   const seenNames = new Set();
 
   // 1. Query The Muse API (highly targeted filtering)
-  log.info(`Searching jobs on The Muse API for Category: "${category}", Level: "${level}"...`);
+  log.info(`Searching jobs on The Muse API for Category: "${category}", Level: "${level}"${location ? `, Location: "${location}"` : ''}...`);
   try {
+    const params = {
+      page: 1,
+      level: level,
+      category: category
+    };
+    if (location) {
+      params.location = location;
+    }
+
     const museResponse = await axios.get('https://www.themuse.com/api/public/jobs', {
-      params: {
-        page: 1,
-        level: level,
-        category: category
-      },
+      params,
       timeout: 8000
     });
 
     const results = museResponse.data?.results || [];
     for (const job of results) {
       const companyName = job.company?.name;
-      if (companyName && !seenNames.has(companyName.toLowerCase())) {
+      if (!companyName) continue;
+
+      // Validate location locally to make sure it includes the target country/city or is remote
+      if (location) {
+        const target = location.toLowerCase();
+        const jobLocations = (job.locations || []).map(l => l.name.toLowerCase());
+        const hasLocMatch = jobLocations.some(loc => loc.includes(target) || loc.includes('remote') || loc.includes('flexible'));
+        if (!hasLocMatch) continue;
+      }
+
+      if (!seenNames.has(companyName.toLowerCase())) {
         seenNames.add(companyName.toLowerCase());
         companies.push({
           name: companyName,
@@ -82,8 +97,16 @@ export async function discoverHiringCompanies(category = 'Software Engineering',
       const hasCategoryMatch = categoryKeywords.some(kw => title.includes(kw) || tags.some(t => t.includes(kw)));
       // Check level match
       const hasLevelMatch = levelKeywords.some(kw => title.includes(kw) || tags.some(t => t.includes(kw)));
+      
+      // Check location match
+      let hasLocationMatch = true;
+      if (location) {
+        const target = location.toLowerCase();
+        const jobLoc = (job.location || '').toLowerCase();
+        hasLocationMatch = jobLoc.includes(target) || jobLoc.includes('remote') || (job.remote === true);
+      }
 
-      if (hasCategoryMatch && hasLevelMatch && companyName && !seenNames.has(companyName.toLowerCase())) {
+      if (hasCategoryMatch && hasLevelMatch && hasLocationMatch && companyName && !seenNames.has(companyName.toLowerCase())) {
         seenNames.add(companyName.toLowerCase());
         companies.push({
           name: companyName,
