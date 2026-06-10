@@ -23,6 +23,8 @@ import { searchCompanies as oceanSearch } from './ocean.js';
 import { searchCompanies as apolloSearch } from './apollo.js';
 import { findContactsForDomain, enrichContact } from './prospeo.js';
 import { sendColdEmail, compileTemplate } from './brevo.js';
+import { discoverHiringCompanies, resolveCompanyDomain } from './jobs.js';
+import { searchContactsByDomain } from './hunter.js';
 
 // Mock API imports
 import {
@@ -39,7 +41,7 @@ program
   .description('Automated cold-outreach pipeline using Ocean.io/Apollo.io, Prospeo, and Brevo')
   .version('1.0.0')
   .option('-m, --mock', 'Run the pipeline in simulation (mock) mode')
-  .option('-p, --provider <provider>', 'Company search provider (ocean, apollo, or manual)')
+  .option('-p, --provider <provider>', 'Company search provider (jobs, ocean, apollo, or manual)')
   .option('-q, --query <query>', 'Keyword/search term for finding companies')
   .option('-d, --domain <domain>', 'Process outreach for a single target domain directly')
   .option('-l, --limit <number>', 'Maximum number of companies to fetch', parseInt, 5)
@@ -49,7 +51,9 @@ program
   .option('-t, --titles <titles>', 'Comma-separated list of job titles to query (or "All")')
   .option('--resume-path <path>', 'Local path to PDF resume file to attach')
   .option('--resume-url <url>', 'URL of a public PDF resume to attach')
-  .option('--strict', 'Strict mode: only send to 100% verified emails (exclude catch_all)');
+  .option('--strict', 'Strict mode: only send to 100% verified emails (exclude catch_all)')
+  .option('--jobs-category <category>', 'Job category for discovery (default: "Software Engineering")')
+  .option('--jobs-level <level>', 'Career seniority level for discovery (default: "Internship")');
 
 program.parse(process.argv);
 const options = program.opts();
@@ -164,6 +168,76 @@ export async function resolveUrlAttachment(url, filename = 'resume.pdf') {
   }
 }
 
+/**
+ * Fetches contacts at a domain, automatically widening filters if no results are found,
+ * and falling back to Hunter.io if available.
+ */
+async function fetchContactsWithFallback(domain, contactLimit, seniorities, titles, isMock, companyName = '') {
+  let contacts = [];
+
+  // 1. Try with initial filters first
+  try {
+    contacts = isMock
+      ? await mockFindContacts(domain, contactLimit, seniorities, titles)
+      : await findContactsForDomain(domain, contactLimit, seniorities, titles);
+    
+    if (contacts.length > 0) return contacts;
+  } catch (err) {
+    if (!err.message.includes('NO_RESULTS')) {
+      throw err; // Re-throw network or auth errors
+    }
+  }
+
+  // 2. Widen fallback list: Campus Recruiter -> HR -> Tech Leadership -> Founders -> All Employees
+  const fallbacks = [
+    { name: 'Campus Recruiter', seniorities: ['Senior', 'Entry', 'Manager'], titles: ['Campus Recruiter', 'University Recruiter', 'Campus Recruitment Specialist'] },
+    { name: 'HR/Talent', seniorities: ['Director', 'Manager', 'Senior', 'Entry'], titles: ['Recruiter', 'Talent Acquisition Specialist', 'Talent Acquisition Partner', 'HR Executive', 'HR Manager', 'Talent Acquisition Manager', 'Talent Acquisition Lead'] },
+    { name: 'Tech Leadership', seniorities: ['Founder/Owner', 'C-Suite', 'Vice President', 'Director', 'Manager'], titles: ['CTO', 'Chief Technology Officer', 'Head of Engineering', 'Director of Engineering', 'VP of Engineering', 'Engineering Manager', 'Software Development Manager', 'Technical Lead', 'Lead Developer', 'Engineering Lead'] },
+    { name: 'Founders & CEOs', seniorities: ['Founder/Owner', 'C-Suite'], titles: ['CEO', 'Founder', 'Co-Founder', 'President'] },
+    { name: 'All Employees (No Filters)', seniorities: ['All'], titles: ['All'] }
+  ];
+
+  for (const preset of fallbacks) {
+    // Skip if it is identical to what we already tried
+    const isSameSeniority = JSON.stringify(preset.seniorities) === JSON.stringify(seniorities);
+    const isSameTitle = JSON.stringify(preset.titles) === JSON.stringify(titles);
+    if (isSameSeniority && isSameTitle) continue;
+
+    try {
+      log.info(`No contacts found with initial filters for ${domain}. Widening search to: ${preset.name}...`);
+      contacts = isMock
+        ? await mockFindContacts(domain, contactLimit, preset.seniorities, preset.titles)
+        : await findContactsForDomain(domain, contactLimit, preset.seniorities, preset.titles);
+      
+      if (contacts.length > 0) {
+        log.success(`Found ${contacts.length} contacts via ${preset.name} fallback for ${domain}!`);
+        return contacts;
+      }
+    } catch (err) {
+      if (!err.message.includes('NO_RESULTS')) {
+        throw err;
+      }
+    }
+  }
+
+  // 3. Ultimate Fallback: Hunter.io
+  const hunterKey = process.env.HUNTER_API_KEY;
+  if (hunterKey && !hunterKey.includes('your_hunter_api_key_here') && !isMock) {
+    log.info(`Prospeo returned no results for ${domain}. Trying Hunter.io Domain Search fallback...`);
+    try {
+      contacts = await searchContactsByDomain(domain, contactLimit, hunterKey);
+      if (contacts.length > 0) {
+        log.success(`Found ${contacts.length} contacts via Hunter.io fallback for ${domain}!`);
+        return contacts;
+      }
+    } catch (err) {
+      log.warn(`Hunter.io fallback search failed: ${err.message}`);
+    }
+  }
+
+  throw new Error('NO_RESULTS');
+}
+
 async function main() {
   printBanner();
 
@@ -247,6 +321,27 @@ async function runHeadlessPipeline() {
       const cleaned = cleanDomain(d);
       return { name: cleaned.split('.')[0], domain: cleaned };
     }).filter(c => isValidDomain(c.domain));
+  } else if (provider === 'jobs') {
+    const jobsCategory = options.jobsCategory || 'Software Engineering';
+    const jobsLevel = options.jobsLevel || 'Internship';
+    const spinner = ora(`Discovering hiring companies for "${jobsCategory}" ("${jobsLevel}")...`).start();
+    try {
+      const discovered = await discoverHiringCompanies(jobsCategory, jobsLevel, limit, isMock);
+      spinner.succeed(`Discovered ${discovered.length} hiring companies.`);
+      
+      const resolveSpinner = ora('Resolving domains for discovered companies...').start();
+      for (const item of discovered) {
+        resolveSpinner.text = `Resolving domain for ${item.name}...`;
+        const domain = await resolveCompanyDomain(item.name, isMock);
+        if (domain) {
+          companies.push({ name: item.name, domain });
+        }
+      }
+      resolveSpinner.succeed(`Resolved domains for ${companies.length} companies.`);
+    } catch (err) {
+      spinner.fail(`Job discovery failed: ${err.message}`);
+      process.exit(1);
+    }
   } else {
     // Company search
     if (!query) {
@@ -305,11 +400,7 @@ async function runHeadlessPipeline() {
       
       let contacts = [];
       try {
-        if (isMock) {
-          contacts = await mockFindContacts(company.domain, contactLimit, seniorities, titles);
-        } else {
-          contacts = await findContactsForDomain(company.domain, contactLimit, seniorities, titles);
-        }
+        contacts = await fetchContactsWithFallback(company.domain, contactLimit, seniorities, titles, isMock, company.name);
       } catch (searchErr) {
         leadSpinner.stop();
         log.warn(`Skipping contact search for ${company.name} (${company.domain}): ${searchErr.message}`);
@@ -321,17 +412,22 @@ async function runHeadlessPipeline() {
         leadSpinner.text = `Enriching contact ${contact.firstName} ${contact.lastName} (${company.name})...`;
         
         let enriched = null;
-        try {
-          if (isMock) {
-            enriched = await mockEnrichContact(contact);
-          } else {
-            enriched = await enrichContact(contact);
-            await sleep(1500); // 1.5s delay to avoid Prospeo rate limits (1 req/sec)
+        if (contact.email) {
+          // Already has email (e.g. resolved from Hunter.io)
+          enriched = contact;
+        } else {
+          try {
+            if (isMock) {
+              enriched = await mockEnrichContact(contact);
+            } else {
+              enriched = await enrichContact(contact);
+              await sleep(1500); // 1.5s delay to avoid Prospeo rate limits (1 req/sec)
+            }
+          } catch (enrichErr) {
+            leadSpinner.stop();
+            log.warn(`Skipping email enrichment for ${contact.firstName} ${contact.lastName}: ${enrichErr.message}`);
+            leadSpinner.start();
           }
-        } catch (enrichErr) {
-          leadSpinner.stop();
-          log.warn(`Skipping email enrichment for ${contact.firstName} ${contact.lastName}: ${enrichErr.message}`);
-          leadSpinner.start();
         }
 
         if (enriched && enriched.email) {
@@ -567,6 +663,7 @@ async function runInteractivePipeline() {
       name: 'provider',
       message: 'Choose company discovery provider:',
       choices: [
+        { name: 'Active Job Listings Search (The Muse & Arbeitnow APIs - Recommended)', value: 'jobs' },
         { name: 'Apollo.io (Recommended free alternative)', value: 'apollo' },
         { name: 'Ocean.io (Standard lookup)', value: 'ocean' },
         { name: 'Manual Input (Enter domains manually)', value: 'manual' }
@@ -596,6 +693,58 @@ async function runInteractivePipeline() {
       const cleaned = cleanDomain(d);
       return { name: cleaned.split('.')[0].charAt(0).toUpperCase() + cleaned.split('.')[0].slice(1), domain: cleaned };
     });
+  } else if (provider === 'jobs') {
+    const { category, level, limit } = await inquirer.prompt([
+      {
+        type: 'list',
+        name: 'category',
+        message: 'Select job category to search:',
+        choices: [
+          'Software Engineering',
+          'Computer and IT',
+          'Design and UX',
+          'Data Science'
+        ],
+        default: 'Software Engineering'
+      },
+      {
+        type: 'list',
+        name: 'level',
+        message: 'Select target seniority level:',
+        choices: [
+          'Internship',
+          'Entry Level',
+          'Mid Level',
+          'Senior Level'
+        ],
+        default: 'Internship'
+      },
+      {
+        type: 'number',
+        name: 'limit',
+        message: 'Max hiring companies to discover:',
+        default: 3
+      }
+    ]);
+
+    const spinner = ora(`Searching active listings for "${category}" at "${level}" level...`).start();
+    try {
+      const discovered = await discoverHiringCompanies(category, level, limit, isMock);
+      spinner.succeed(`Discovered ${discovered.length} hiring companies.`);
+      
+      const resolveSpinner = ora('Resolving company domains...').start();
+      for (const item of discovered) {
+        resolveSpinner.text = `Resolving domain for ${item.name}...`;
+        const domain = await resolveCompanyDomain(item.name, isMock);
+        if (domain) {
+          companies.push({ name: item.name, domain });
+        }
+      }
+      resolveSpinner.succeed(`Domain resolution complete. Resolved ${companies.length} companies.`);
+    } catch (err) {
+      spinner.fail(`Job discovery failed: ${err.message}`);
+      return;
+    }
   } else {
     // Ocean/Apollo keyword search
     const { query, limit } = await inquirer.prompt([
@@ -854,11 +1003,7 @@ async function runInteractivePipeline() {
       
       let contacts = [];
       try {
-        if (isMock) {
-          contacts = await mockFindContacts(company.domain, contactLimit, seniorities, titles);
-        } else {
-          contacts = await findContactsForDomain(company.domain, contactLimit, seniorities, titles);
-        }
+        contacts = await fetchContactsWithFallback(company.domain, contactLimit, seniorities, titles, isMock, company.name);
       } catch (searchErr) {
         leadSpinner.stop();
         log.warn(`Skipping contact search for ${company.domain}: ${searchErr.message}`);
@@ -870,17 +1015,22 @@ async function runInteractivePipeline() {
         leadSpinner.text = `Enriching email for ${contact.firstName} ${contact.lastName}...`;
         
         let enriched = null;
-        try {
-          if (isMock) {
-            enriched = await mockEnrichContact(contact);
-          } else {
-            enriched = await enrichContact(contact);
-            await sleep(1500); // 1.5s delay to avoid Prospeo rate limits (1 req/sec)
+        if (contact.email) {
+          // Already has email (e.g. resolved from Hunter.io)
+          enriched = contact;
+        } else {
+          try {
+            if (isMock) {
+              enriched = await mockEnrichContact(contact);
+            } else {
+              enriched = await enrichContact(contact);
+              await sleep(1500); // 1.5s delay to avoid Prospeo rate limits (1 req/sec)
+            }
+          } catch (enrichErr) {
+            leadSpinner.stop();
+            log.warn(`Skipping email enrichment for ${contact.firstName} ${contact.lastName}: ${enrichErr.message}`);
+            leadSpinner.start();
           }
-        } catch (enrichErr) {
-          leadSpinner.stop();
-          log.warn(`Skipping email enrichment for ${contact.firstName} ${contact.lastName}: ${enrichErr.message}`);
-          leadSpinner.start();
         }
 
         if (enriched && enriched.email) {
