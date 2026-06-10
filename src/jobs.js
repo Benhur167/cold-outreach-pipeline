@@ -21,6 +21,7 @@ export async function discoverHiringCompanies(category = 'Software Engineering',
       { name: 'Cloudflare', jobTitle: 'SDE Intern, Infrastructure', source: 'The Muse (Mock)' },
       { name: 'Figma', jobTitle: 'Frontend Developer Intern', source: 'The Muse (Mock)' },
       { name: 'SumUp', jobTitle: 'Mobile Web Developer Intern', source: 'Arbeitnow (Mock)' },
+      { name: 'Khaata', jobTitle: 'Python Developer Intern', source: 'Hasjob India (Mock)', resolvedDomain: 'khaata.in' },
       { name: 'Roku', jobTitle: 'Android Systems Intern', source: 'The Muse (Mock)' }
     ].slice(0, limit);
   }
@@ -138,6 +139,100 @@ export async function discoverHiringCompanies(category = 'Software Engineering',
     }
   } catch (err) {
     log.warn(`Arbeitnow API job search failed: ${err.message}`);
+  }
+
+  // If we already reached our limit, return early
+  if (companies.length >= limit) {
+    return companies.slice(0, limit);
+  }
+
+  // 3. Query Hasjob Atom Feed (India startup board)
+  log.info('Searching jobs on Hasjob India feed...');
+  try {
+    const response = await axios.get('https://hasjob.co/feed', {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+      },
+      timeout: 8000
+    });
+
+    const entryMatches = response.data.matchAll(/<entry>([\s\S]*?)<\/entry>/g);
+    for (const match of entryMatches) {
+      if (companies.length >= limit) break;
+
+      const content = match[1];
+      const titleMatch = content.match(/<title[^>]*>([\s\S]*?)<\/title>/);
+      const linkMatch = content.match(/<link[^>]*href="([^"]+)"[^>]*\/>/) || content.match(/<link[^>]*href="([^"]+)"[^>]*>/);
+      const locationMatch = content.match(/<location[^>]*>([\s\S]*?)<\/location>/);
+      
+      if (titleMatch && linkMatch) {
+        const title = titleMatch[1].replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1').trim();
+        const link = linkMatch[1].trim();
+        const jobLoc = locationMatch ? locationMatch[1].replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1').trim().toLowerCase() : '';
+        const titleLower = title.toLowerCase();
+
+        // Extract company domain/slug from link
+        let companyDomain = '';
+        let companyName = '';
+        try {
+          const urlObj = new URL(link);
+          const parts = urlObj.pathname.split('/').filter(Boolean);
+          if (parts.length >= 1) {
+            companyDomain = parts[0]; // e.g. 'capa.cloud' or 'schematise.tech'
+            // If it is a domain, use domain name for company name
+            if (companyDomain.includes('.')) {
+              companyName = companyDomain.split('.')[0];
+              companyName = companyName.charAt(0).toUpperCase() + companyName.slice(1);
+            } else {
+              companyName = companyDomain.charAt(0).toUpperCase() + companyDomain.slice(1);
+              companyDomain = ''; // Guess it later
+            }
+          }
+        } catch (e) {
+          continue;
+        }
+
+        if (!companyName) continue;
+
+        // Keywords to filter Hasjob listings locally
+        const categoryKeywords = ['software', 'engineer', 'developer', 'programmer', 'frontend', 'backend', 'fullstack', 'react', 'node', 'android', 'ios', 'web'];
+        const levelKeywords = level.toLowerCase() === 'internship' 
+          ? ['intern', 'student', 'co-op', 'placement', 'trainee', 'apprentice']
+          : ['junior', 'entry', 'associate', 'grad'];
+
+        // Check category match
+        const hasCategoryMatch = categoryKeywords.some(kw => titleLower.includes(kw));
+        
+        // Check level match
+        const hasLevelMatch = levelKeywords.some(kw => titleLower.includes(kw));
+
+        // Check location match
+        let hasLocationMatch = true;
+        if (location) {
+          const target = location.toLowerCase();
+          hasLocationMatch = jobLoc.includes(target) || 
+                             jobLoc.includes('remote') || 
+                             jobLoc.includes('anywhere') || 
+                             jobLoc.includes('flexible') ||
+                             (target === 'india' && (jobLoc.includes('remote') || jobLoc.includes('anywhere')));
+        }
+
+        if (hasCategoryMatch && hasLevelMatch && hasLocationMatch) {
+          const key = companyName.toLowerCase();
+          if (!seenNames.has(key)) {
+            seenNames.add(key);
+            companies.push({
+              name: companyName,
+              jobTitle: title,
+              source: 'Hasjob India',
+              resolvedDomain: companyDomain || null
+            });
+          }
+        }
+      }
+    }
+  } catch (err) {
+    log.warn(`Hasjob India job search failed: ${err.message}`);
   }
 
   return companies.slice(0, limit);

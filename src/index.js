@@ -44,8 +44,8 @@ program
   .option('-p, --provider <provider>', 'Company search provider (jobs, ocean, apollo, or manual)')
   .option('-q, --query <query>', 'Keyword/search term for finding companies')
   .option('-d, --domain <domain>', 'Process outreach for a single target domain directly')
-  .option('-l, --limit <number>', 'Maximum number of companies to fetch', parseInt, 5)
-  .option('-c, --contact-limit <number>', 'Maximum contacts to enrich per company', parseInt, 2)
+  .option('-l, --limit <number>', 'Maximum number of companies to fetch', (val) => parseInt(val, 10), 5)
+  .option('-c, --contact-limit <number>', 'Maximum contacts to enrich per company', (val) => parseInt(val, 10), 2)
   .option('-s, --send', 'Send emails automatically without prompting')
   .option('-y, --seniorities <seniorities>', 'Comma-separated list of seniorities to query (or "All")')
   .option('-t, --titles <titles>', 'Comma-separated list of job titles to query (or "All")')
@@ -334,7 +334,7 @@ async function runHeadlessPipeline() {
       const resolveSpinner = ora('Resolving domains for discovered companies...').start();
       for (const item of discovered) {
         resolveSpinner.text = `Resolving domain for ${item.name}...`;
-        const domain = await resolveCompanyDomain(item.name, isMock);
+        const domain = item.resolvedDomain || await resolveCompanyDomain(item.name, isMock);
         if (domain) {
           companies.push({ name: item.name, domain });
         }
@@ -743,7 +743,7 @@ async function runInteractivePipeline() {
       const resolveSpinner = ora('Resolving company domains...').start();
       for (const item of discovered) {
         resolveSpinner.text = `Resolving domain for ${item.name}...`;
-        const domain = await resolveCompanyDomain(item.name, isMock);
+        const domain = item.resolvedDomain || await resolveCompanyDomain(item.name, isMock);
         if (domain) {
           companies.push({ name: item.name, domain });
         }
