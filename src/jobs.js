@@ -29,24 +29,45 @@ export async function discoverHiringCompanies(category = 'Software Engineering',
   const seenNames = new Set();
 
   // 1. Query The Muse API (highly targeted filtering)
-  log.info(`Searching jobs on The Muse API for Category: "${category}", Level: "${level}"${location ? `, Location: "${location}"` : ''}...`);
+  log.info(`Searching jobs on The Muse API for Category: "${category}", Level: "${level}"...`);
   try {
     const params = {
       page: 1,
       level: level,
       category: category
     };
-    if (location) {
-      params.location = location;
-    }
 
-    const museResponse = await axios.get('https://www.themuse.com/api/public/jobs', {
+    const firstResponse = await axios.get('https://www.themuse.com/api/public/jobs', {
       params,
       timeout: 8000
     });
 
-    const results = museResponse.data?.results || [];
-    for (const job of results) {
+    const pageCount = firstResponse.data?.page_count || 1;
+    const allResults = [...(firstResponse.data?.results || [])];
+
+    // Fetch pages 2 to min(5, pageCount) in parallel to bypass location filter API bug and aggregate results
+    const maxPagesToFetch = Math.min(5, pageCount);
+    if (maxPagesToFetch > 1) {
+      const promises = [];
+      for (let p = 2; p <= maxPagesToFetch; p++) {
+        promises.push(
+          axios.get('https://www.themuse.com/api/public/jobs', {
+            params: { ...params, page: p },
+            timeout: 8000
+          }).then(res => res.data?.results || [])
+            .catch(err => {
+              log.warn(`Failed to fetch page ${p} from The Muse API: ${err.message}`);
+              return [];
+            })
+        );
+      }
+      const pagesResults = await Promise.all(promises);
+      for (const pageResults of pagesResults) {
+        allResults.push(...pageResults);
+      }
+    }
+
+    for (const job of allResults) {
       const companyName = job.company?.name;
       if (!companyName) continue;
 

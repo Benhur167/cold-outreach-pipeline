@@ -434,7 +434,7 @@ async function runHeadlessPipeline() {
 
         if (enriched && enriched.email) {
           // Strict verification filtering
-          if (isStrict && enriched.emailStatus !== 'verified') {
+          if (isStrict && (enriched.emailStatus || '').toLowerCase() !== 'verified') {
             leadSpinner.stop();
             log.warn(`Skipping risky email for ${contact.firstName} ${contact.lastName} in Strict Mode (${enriched.emailStatus}).`);
             
@@ -1043,7 +1043,7 @@ async function runInteractivePipeline() {
 
         if (enriched && enriched.email) {
           // Strict verification filtering
-          if (enforceStrict && enriched.emailStatus !== 'verified') {
+          if (enforceStrict && (enriched.emailStatus || '').toLowerCase() !== 'verified') {
             leadSpinner.stop();
             log.warn(`Skipping risky email for ${contact.firstName} ${contact.lastName} in Strict Mode (${enriched.emailStatus}).`);
             
